@@ -139,8 +139,8 @@ def parse_foreign_key_constraint(constraint_str, table):
 def save_migration(up_sql, down_sql):
     os.makedirs("migrations", exist_ok=True)
     version = datetime.now().strftime("%Y%m%d_%H%M%S")
-    up_file = f"migrations/{version}__auto.up.sql"
-    down_file = f"migrations/{version}__auto.down.sql"
+    up_file = f"migrations/{version}.up.sql"
+    down_file = f"migrations/{version}.down.sql"
 
     with open(up_file, "w") as f:
         f.write("\n".join(up_sql))
