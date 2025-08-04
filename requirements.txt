@@ -1,0 +1,4 @@
+sqlalchemy
+psycopg2-binary   # for PostgreSQL
+mysql-connector-python  # optional, if you want MySQL support too
+python-dotenv
