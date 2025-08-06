@@ -45,7 +45,17 @@ class SchemaComparator:
                 if col_match:
                     constraint['columns'] = [col_match.group(1)]
         
+        elif 'UniqueConstraint' in constraint_str: 
+            constraint['type'] = 'UNIQUE'
+            columns = re.findall(r"Column\('([^']+)'", constraint_str)
+            constraint['columns'] = columns
+            if "name='" in constraint_str:
+                name_match = re.search(r"name='([^']+)'", constraint_str)
+                if name_match:
+                    constraint['name'] = name_match.group(1)
+
         return constraint
+
     
     def get_column_definition(self, column: Dict) -> str:
         """Generate column definition for CREATE/ALTER statements"""
@@ -213,6 +223,22 @@ class SchemaComparator:
                 col_def = self.get_column_definition(new_col)
                 self.sql_statements.append(f"ALTER TABLE {table_name} MODIFY COLUMN {col_def};")
         
+        # Modify UNIQUE constraints 🆕
+        old_uniques = {tuple(self.parse_constraint(c)['columns']) for c in old_schema.get("constraints", []) if "UniqueConstraint" in c}
+        new_uniques = {tuple(self.parse_constraint(c)['columns']) for c in new_schema.get("constraints", []) if "UniqueConstraint" in c}
+
+        uniques_to_drop = old_uniques - new_uniques
+        uniques_to_add = new_uniques - old_uniques
+
+        for cols in uniques_to_drop:
+            constraint_name = f"{table_name}_{'_'.join(cols)}_uniq"
+            self.sql_statements.append(f"ALTER TABLE {table_name} DROP INDEX {constraint_name};")
+
+        for cols in uniques_to_add:
+            constraint_name = f"{table_name}_{'_'.join(cols)}_uniq"
+            cols_str = ", ".join(cols)
+            self.sql_statements.append(f"ALTER TABLE {table_name} ADD CONSTRAINT {constraint_name} UNIQUE ({cols_str});")
+       
         # Handle primary key changes
         old_pk_cols = set()
         new_pk_cols = set()
