@@ -249,7 +249,7 @@ def main():
     comparator = SchemaComparator()
     sql_statements = comparator.compare_schemas(old_schema, new_schema)
 
-    output_file = "migration_output.sql"
+    output_file = "migrations/migration_output.sql"
 
     with open(output_file, "w") as f:
         f.write("-- SQL statements to transform old_schema to new_schema\n")
