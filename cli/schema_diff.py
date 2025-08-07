@@ -1,7 +1,7 @@
 import json
-import re
-from typing import Dict, List, Set, Tuple, Optional
 import sys
+from typing import Dict, List, Set, Tuple, Optional
+import re
 
 class SchemaComparator:
     def __init__(self):
@@ -14,7 +14,8 @@ class SchemaComparator:
             'columns': [],
             'name': None,
             'referenced_table': None,
-            'referenced_columns': []
+            'referenced_columns': [],
+            'condition': None,
         }
         
         if 'PrimaryKeyConstraint' in constraint_str:
@@ -54,8 +55,56 @@ class SchemaComparator:
                 if name_match:
                     constraint['name'] = name_match.group(1)
 
+        elif 'CheckConstraint' in constraint_str:
+            constraint['type'] = 'CHECK'
+            # Extract constraint name
+            name_match = re.search(r"name='([^']+)'", constraint_str)
+            if name_match:
+                constraint['name'] = name_match.group(1)
+
+            # Improved regex: match everything between the first '(' and the last ')'
+            condition_match = re.search(
+                r"CheckConstraint\(\s*'((?:[^'\\]|\\.)*)'", constraint_str
+            )
+            if condition_match:
+                raw_condition = condition_match.group(1)
+                # Unescape single quotes
+                constraint['condition'] = raw_condition.replace("\\'", "'")
+            else:
+                constraint['condition'] = "<UNKNOWN_CONDITION>"
+
+
         return constraint
 
+    def _extract_check_constraints(self, constraints: List[str]) -> Dict[str, str]:
+        checks = {}
+        for constraint_str in constraints:
+            if 'CheckConstraint' in constraint_str:
+                name_match = re.search(r"name='([^']+)'", constraint_str)
+                condition_match = re.search(
+                    r"CheckConstraint\(\s*'((?:[^'\\]|\\.)*)'", constraint_str
+                )
+                if name_match and condition_match:
+                    raw_condition = condition_match.group(1)
+                    checks[name_match.group(1)] = raw_condition.replace("\\'", "'")
+                elif name_match:
+                    checks[name_match.group(1)] = "<UNKNOWN_CONDITION>"
+        return checks
+
+    def generate_add_check_sql(table_name: str, constraints: list) -> list:
+        """Generate ALTER TABLE ADD CONSTRAINT ... CHECK SQL statements."""
+        sql = []
+        checks = SchemaComparator._extract_check_constraints(SchemaComparator, constraints)
+        for name, condition in checks.items():
+            stmt = f"ALTER TABLE `{table_name}` ADD CONSTRAINT `{name}` CHECK ({condition});"
+            sql.append(stmt)
+        return sql
+
+    def _extract_not_null_columns(self, columns: List[Dict]) -> Set[str]:
+        """
+        Extract the names of NOT NULL columns from a table's column definitions.
+        """
+        return {col["name"] for col in columns if col.get("nullable") is False}
     
     def get_column_definition(self, column: Dict) -> str:
         """Generate column definition for CREATE/ALTER statements"""
@@ -126,21 +175,19 @@ class SchemaComparator:
 
 
     def _drop_removed_foreign_keys(self, table_name: str, old_table_def: Dict, new_schema: Dict):
-        """
-        Generate DROP FOREIGN KEY statements for foreign keys that exist in old_table_def but not in new_schema.
-        """
         old_constraints = old_table_def.get("constraints", [])
         new_constraints = new_schema.get(table_name, {}).get("constraints", [])
 
-        old_fk_names = self._extract_last_fk_name(old_constraints)
-        new_fk_names = self._extract_last_fk_name(new_constraints)
-
-        to_drop = old_fk_names - new_fk_names
-
-        for fk_name in to_drop:
-            self.sql_statements.append(
-                f"ALTER TABLE `{table_name}` DROP FOREIGN KEY `{fk_name}`;"
-            )
+        old_fk_names = {
+            self.parse_constraint(c)['name']
+            for c in old_constraints if 'ForeignKeyConstraint' in c
+        }
+        new_fk_names = {
+            self.parse_constraint(c)['name']
+            for c in new_constraints if 'ForeignKeyConstraint' in c
+        }
+        for fk_name in old_fk_names - new_fk_names:
+            self.sql_statements.append(f"ALTER TABLE `{table_name}` DROP FOREIGN KEY `{fk_name}`;")
 
 
     def _add_foreign_keys(self, table_name: str, table_schema: Dict):
@@ -172,11 +219,9 @@ class SchemaComparator:
         constraints = table_schema.get('constraints', [])
 
         # Build column definitions
-        column_defs = []
-        for column in columns:
-            column_defs.append(self.get_column_definition(column))
+        column_defs = [self.get_column_definition(column) for column in columns]
 
-        # Build primary key constraint definitions (only add if columns exist)
+        # Build constraint definitions
         constraint_defs = []
         for constraint_str in constraints:
             constraint = self.parse_constraint(constraint_str)
@@ -184,10 +229,16 @@ class SchemaComparator:
             if constraint['type'] == 'PRIMARY_KEY' and constraint['columns']:
                 constraint_defs.append(f"PRIMARY KEY ({', '.join(constraint['columns'])})")
 
-        # Create the CREATE TABLE statement
+            elif constraint['type'] == 'CHECK' and constraint.get('condition') and constraint['condition'] != "<UNKNOWN_CONDITION>":
+                constraint_defs.append(f"CONSTRAINT {constraint['name']} CHECK ({constraint['condition']})")
+
+            elif constraint['type'] == 'UNIQUE' and constraint.get('columns'):
+                constraint_defs.append(f"UNIQUE ({', '.join(constraint['columns'])})")
+
         all_defs = column_defs + constraint_defs
         create_stmt = f"CREATE TABLE {table_name} (\n    {', '.join(all_defs)}\n);"
         self.sql_statements.append(create_stmt)
+
     
     def _modify_table(self, table_name: str, old_schema: Dict, new_schema: Dict):
         """Generate ALTER TABLE statements for table modifications"""
@@ -251,11 +302,46 @@ class SchemaComparator:
             if constraint['type'] == 'PRIMARY_KEY':
                 new_pk_cols.update(constraint['columns'])
         
-        if old_pk_cols != new_pk_cols:
-            if old_pk_cols:
-                self.sql_statements.append(f"ALTER TABLE {table_name} DROP PRIMARY KEY;")
-            if new_pk_cols:
-                self.sql_statements.append(f"ALTER TABLE {table_name} ADD PRIMARY KEY ({', '.join(sorted(new_pk_cols))});")
+        # Handle CHECK constraints
+        old_checks = self._extract_check_constraints(old_schema.get("constraints", []))
+        new_checks = self._extract_check_constraints(new_schema.get("constraints", []))
+
+        added_checks = new_checks.keys() - old_checks.keys()
+        removed_checks = old_checks.keys() - new_checks.keys()
+
+        for name in added_checks:
+            condition = new_checks[name]
+            if condition and condition != "<UNKNOWN_CONDITION>":
+                self.sql_statements.append(
+                    f"ALTER TABLE `{table_name}` ADD CONSTRAINT `{name}` CHECK ({condition});"
+                )
+            else:
+                self.sql_statements.append(
+                    f"-- ⚠️ Skipped CHECK constraint `{name}` on `{table_name}`: unknown condition"
+                )
+
+        for name in removed_checks:
+            self.sql_statements.append(
+                f"ALTER TABLE `{table_name}` DROP CHECK `{name}`;"
+            )
+
+
+        # --- NOT NULL CHANGES ---
+        old_not_nulls = self._extract_not_null_columns(old_schema.get("columns", []))
+        new_not_nulls = self._extract_not_null_columns(new_schema.get("columns", []))
+
+        added_not_nulls = new_not_nulls - old_not_nulls
+        removed_not_nulls = old_not_nulls - new_not_nulls
+
+        for col in added_not_nulls:
+            self.sql_statements.append(
+                f"ALTER TABLE `{table_name}` MODIFY `{col}` SET NOT NULL;"
+            )
+
+        for col in removed_not_nulls:
+            self.sql_statements.append(
+                f"ALTER TABLE `{table_name}` MODIFY `{col}` DROP NOT NULL;"
+            )
 
 def main():
     if len(sys.argv) != 3:
@@ -290,6 +376,6 @@ def main():
     print(f"✅ SQL migration script written to: {output_file}")
 
 
-    
+        
 if __name__ == "__main__":
     main()

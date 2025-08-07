@@ -14,4 +14,4 @@ def reflect_schema():
     engine = get_engine()
     metadata = MetaData()
     metadata.reflect(bind=engine)
-    return metadata
+    return metadata,engine
