@@ -1,381 +1,214 @@
 import json
 import sys
-from typing import Dict, List, Set, Tuple, Optional
-import re
+from typing import Dict, List, Set
+import os
 
 class SchemaComparator:
-    def __init__(self):
-        self.sql_statements = []
-    
-    def parse_constraint(self, constraint_str: str) -> Dict:
-        """Parse constraint string to extract constraint information"""
-        constraint = {
-            'type': None,
-            'columns': [],
-            'name': None,
-            'referenced_table': None,
-            'referenced_columns': [],
-            'condition': None,
+    def __init__(self, dialect: str = "mysql"):
+        """
+        dialect: "mysql" or "postgresql"
+        """
+        self.dialect = dialect.lower()
+        self.sql_statements: List[str] = []
+
+    def parse_constraint(self, constraint: Dict) -> Dict:
+        ctype = constraint.get("type", "").upper()
+        if ctype.endswith("CONSTRAINT"):
+            ctype = ctype.replace("CONSTRAINT", "") 
+        return {
+            "type": ctype,
+            "columns": constraint.get("columns", []),
+            "name": constraint.get("name"),
+            "referenced_table": constraint.get("referenced_table"),
+            "referenced_columns": constraint.get("referenced_columns", []),
+            "condition": constraint.get("clause") or constraint.get("definition") or constraint.get("condition")
         }
-        
-        if 'PrimaryKeyConstraint' in constraint_str:
-            constraint['type'] = 'PRIMARY_KEY'
-            # Extract column names from PrimaryKeyConstraint
-            if "Column('" in constraint_str:
-                columns = re.findall(r"Column\('([^']+)'", constraint_str)
-                constraint['columns'] = columns
-        
-        elif 'ForeignKeyConstraint' in constraint_str:
-            constraint['type'] = 'FOREIGN_KEY'
-            # Extract constraint name
-            if "name='" in constraint_str:
-                name_match = re.search(r"name='([^']+)'", constraint_str)
-                if name_match:
-                    constraint['name'] = name_match.group(1)
-            
-            # Extract column name and referenced table/column from the constraint string
-            # Look for ForeignKey('table.column') pattern
-            fk_matches = re.findall(r"ForeignKey\('([^.]+)\.([^']+)'\)", constraint_str)
-            if fk_matches:
-                constraint['referenced_table'] = fk_matches[0][0]
-                constraint['referenced_columns'] = [fk_matches[0][1]]
-                
-                # Find the local column by looking for the column that has this ForeignKey
-                col_fk_pattern = r"Column\('([^']+)', [^,]+, ForeignKey\('[^']+'\)"
-                col_match = re.search(col_fk_pattern, constraint_str)
-                if col_match:
-                    constraint['columns'] = [col_match.group(1)]
-        
-        elif 'UniqueConstraint' in constraint_str: 
-            constraint['type'] = 'UNIQUE'
-            columns = re.findall(r"Column\('([^']+)'", constraint_str)
-            constraint['columns'] = columns
-            if "name='" in constraint_str:
-                name_match = re.search(r"name='([^']+)'", constraint_str)
-                if name_match:
-                    constraint['name'] = name_match.group(1)
-
-        elif 'CheckConstraint' in constraint_str:
-            constraint['type'] = 'CHECK'
-            # Extract constraint name
-            name_match = re.search(r"name='([^']+)'", constraint_str)
-            if name_match:
-                constraint['name'] = name_match.group(1)
-
-            # Improved regex: match everything between the first '(' and the last ')'
-            condition_match = re.search(
-                r"CheckConstraint\(\s*'((?:[^'\\]|\\.)*)'", constraint_str
-            )
-            if condition_match:
-                raw_condition = condition_match.group(1)
-                # Unescape single quotes
-                constraint['condition'] = raw_condition.replace("\\'", "'")
-            else:
-                constraint['condition'] = "<UNKNOWN_CONDITION>"
 
 
-        return constraint
-
-    def _extract_check_constraints(self, constraints: List[str]) -> Dict[str, str]:
-        checks = {}
-        for constraint_str in constraints:
-            if 'CheckConstraint' in constraint_str:
-                name_match = re.search(r"name='([^']+)'", constraint_str)
-                condition_match = re.search(
-                    r"CheckConstraint\(\s*'((?:[^'\\]|\\.)*)'", constraint_str
-                )
-                if name_match and condition_match:
-                    raw_condition = condition_match.group(1)
-                    checks[name_match.group(1)] = raw_condition.replace("\\'", "'")
-                elif name_match:
-                    checks[name_match.group(1)] = "<UNKNOWN_CONDITION>"
-        return checks
-
-    def generate_add_check_sql(table_name: str, constraints: list) -> list:
-        """Generate ALTER TABLE ADD CONSTRAINT ... CHECK SQL statements."""
-        sql = []
-        checks = SchemaComparator._extract_check_constraints(SchemaComparator, constraints)
-        for name, condition in checks.items():
-            stmt = f"ALTER TABLE `{table_name}` ADD CONSTRAINT `{name}` CHECK ({condition});"
-            sql.append(stmt)
-        return sql
-
-    def _extract_not_null_columns(self, columns: List[Dict]) -> Set[str]:
-        """
-        Extract the names of NOT NULL columns from a table's column definitions.
-        """
-        return {col["name"] for col in columns if col.get("nullable") is False}
-    
     def get_column_definition(self, column: Dict) -> str:
         """Generate column definition for CREATE/ALTER statements"""
-        col_def = f"{column['name']} {column['type']}"
-        
-        if not column['nullable']:
+        col_def = f"`{column['name']}` {column['type']}"
+        if not column.get("nullable", True):
             col_def += " NOT NULL"
-        
-        if column['default'] and column['default'] != "None":
+        if column.get("default") and column["default"] != "None":
             col_def += f" DEFAULT {column['default']}"
-        
         return col_def
-    
-    def compare_schemas(self, old_schema: Dict, new_schema: Dict) -> List[str]:
-        """Compare two schemas and generate ALTER statements"""
-        self.sql_statements = []
-        
-        # Get table names from both schemas
-        old_tables = set(old_schema.keys())
-        new_tables = set(new_schema.keys())
-        
-        # Tables to drop (exist in old_schema but not in new_schema)
-        tables_to_drop = old_tables - new_tables
-        
-        # Tables to create (exist in new_schema but not in old_schema)
-        tables_to_create = new_tables - old_tables
-        
-        # Tables to modify (exist in both schemas)
-        tables_to_modify = old_tables & new_tables
-        
-        # First, drop foreign key constraints from tables that will be dropped or modified
-        for table_name in sorted(tables_to_drop | tables_to_modify):
-            if table_name in old_schema:
-                self._drop_removed_foreign_keys(table_name, old_schema[table_name],new_schema)
-        
-        # Process table modifications (ALTER instead of DROP/CREATE when possible)
-        for table_name in sorted(tables_to_modify):
-            self._modify_table(table_name, old_schema[table_name], new_schema[table_name])
-        
-        # Process table drops
-        for table_name in sorted(tables_to_drop):
-            self._drop_table(table_name, old_schema[table_name])
-        
-        # Process table creations
-        for table_name in sorted(tables_to_create):
-            self._create_table(table_name, new_schema[table_name])
-        
-        # Add foreign key constraints for new and modified tables
-        for table_name in sorted(tables_to_create | tables_to_modify):
-            if table_name in new_schema:
-                self._add_foreign_keys(table_name, new_schema[table_name])
-        
-        return self.sql_statements
-    
-  
-    def _extract_last_fk_name(self, constraints: List[str]) -> Set[str]:
-        """
-        Extract only the last foreign key constraint name from the constraint list.
-        """
-        last_fk_name = None
-        for constraint in constraints:
-            if "ForeignKeyConstraint" in constraint:
-                match = re.search(r"name='(.*?)'", constraint)
-                if match:
-                    last_fk_name = match.group(1)
-        return {last_fk_name} if last_fk_name else set()
 
-
-
-    def _drop_removed_foreign_keys(self, table_name: str, old_table_def: Dict, new_schema: Dict):
-        old_constraints = old_table_def.get("constraints", [])
-        new_constraints = new_schema.get(table_name, {}).get("constraints", [])
-
-        old_fk_names = {
-            self.parse_constraint(c)['name']
-            for c in old_constraints if 'ForeignKeyConstraint' in c
-        }
-        new_fk_names = {
-            self.parse_constraint(c)['name']
-            for c in new_constraints if 'ForeignKeyConstraint' in c
-        }
-        for fk_name in old_fk_names - new_fk_names:
-            self.sql_statements.append(f"ALTER TABLE `{table_name}` DROP FOREIGN KEY `{fk_name}`;")
-
-
-    def _add_foreign_keys(self, table_name: str, table_schema: Dict):
-        """Add foreign key constraints to a table"""
-        for constraint_str in table_schema.get('constraints', []):
-            constraint = self.parse_constraint(constraint_str)
-            if constraint['type'] == 'FOREIGN_KEY':
-                if (constraint['columns'] and constraint['referenced_table'] and 
-                    constraint['referenced_columns']):
-                    
-                    column_name = constraint['columns'][0]
-                    ref_table = constraint['referenced_table']
-                    ref_column = constraint['referenced_columns'][0]
-                    
-                    if constraint['name']:
-                        fk_stmt = f"ALTER TABLE {table_name} ADD CONSTRAINT {constraint['name']} FOREIGN KEY ({column_name}) REFERENCES {ref_table}({ref_column});"
-                    else:
-                        fk_stmt = f"ALTER TABLE {table_name} ADD FOREIGN KEY ({column_name}) REFERENCES {ref_table}({ref_column});"
-                    
-                    self.sql_statements.append(fk_stmt)
-    
-    def _drop_table(self, table_name: str, table_schema: Dict):
-        """Generate DROP TABLE statement (only called for tables that don't exist in target schema)"""
-        self.sql_statements.append(f"DROP TABLE {table_name};")
+    def _extract_not_null_columns(self, columns: List[Dict]) -> Set[str]:
+        return {col["name"] for col in columns if not col.get("nullable", True)}
     
     def _create_table(self, table_name: str, table_schema: Dict):
         """Generate CREATE TABLE statement"""
-        columns = table_schema['columns']
-        constraints = table_schema.get('constraints', [])
-
-        # Build column definitions
-        column_defs = [self.get_column_definition(column) for column in columns]
-
-        # Build constraint definitions
+        column_defs = [self.get_column_definition(col) for col in table_schema.get("columns", [])]
         constraint_defs = []
-        for constraint_str in constraints:
-            constraint = self.parse_constraint(constraint_str)
 
-            if constraint['type'] == 'PRIMARY_KEY' and constraint['columns']:
-                constraint_defs.append(f"PRIMARY KEY ({', '.join(constraint['columns'])})")
-
-            elif constraint['type'] == 'CHECK' and constraint.get('condition') and constraint['condition'] != "<UNKNOWN_CONDITION>":
-                constraint_defs.append(f"CONSTRAINT {constraint['name']} CHECK ({constraint['condition']})")
-
-            elif constraint['type'] == 'UNIQUE' and constraint.get('columns'):
-                constraint_defs.append(f"UNIQUE ({', '.join(constraint['columns'])})")
+        for cons in table_schema.get("constraints", []):
+                c = self.parse_constraint(cons)
+                if c['type'] == "PRIMARYKEY" and c['columns']:
+                    constraint_defs.append(f"PRIMARY KEY ({', '.join(c['columns'])})")
+                elif c['type'] == "CHECK" and c.get('condition'):
+                    cname = f"`{c['name']}`" if c['name'] else ""
+                    constraint_defs.append(f"CONSTRAINT {cname} CHECK ({c['condition']})")
+                elif c['type'] == "UNIQUE" and c.get('columns'):
+                    cname = f"`{c['name']}`" if c['name'] else ""
+                    constraint_defs.append(f"CONSTRAINT {cname} UNIQUE ({', '.join(c['columns'])})")
+                elif c['type'] == "FOREIGNKEY" and c.get('columns') and c.get('referenced_table') and c.get('referenced_columns'):
+                    cname = f"`{c['name']}`" if c['name'] else ""
+                    constraint_defs.append(
+                        f"CONSTRAINT {cname} FOREIGN KEY ({', '.join(c['columns'])}) REFERENCES {c['referenced_table']}({', '.join(c['referenced_columns'])})"
+                    )
 
         all_defs = column_defs + constraint_defs
-        create_stmt = f"CREATE TABLE {table_name} (\n    {', '.join(all_defs)}\n);"
+        create_stmt = f"CREATE TABLE `{table_name}` (\n    " + ",\n    ".join(all_defs) + "\n);"
         self.sql_statements.append(create_stmt)
 
-    
+    def _drop_table(self, table_name: str):
+        self.sql_statements.append(f"DROP TABLE `{table_name}`;")
+
     def _modify_table(self, table_name: str, old_schema: Dict, new_schema: Dict):
-        """Generate ALTER TABLE statements for table modifications"""
-        old_columns = {col['name']: col for col in old_schema['columns']}
-        new_columns = {col['name']: col for col in new_schema['columns']}
-        
-        old_constraints = [self.parse_constraint(c) for c in old_schema.get('constraints', [])]
-        new_constraints = [self.parse_constraint(c) for c in new_schema.get('constraints', [])]
-        
-        # Drop columns that don't exist in new schema
-        columns_to_drop = set(old_columns.keys()) - set(new_columns.keys())
-        for column_name in sorted(columns_to_drop):
-            self.sql_statements.append(f"ALTER TABLE {table_name} DROP COLUMN {column_name};")
-        
-        # Add new columns
-        columns_to_add = set(new_columns.keys()) - set(old_columns.keys())
-        for column_name in sorted(columns_to_add):
-            column = new_columns[column_name]
-            col_def = self.get_column_definition(column)
-            self.sql_statements.append(f"ALTER TABLE {table_name} ADD COLUMN {col_def};")
-        
+        old_columns = {col['name']: col for col in old_schema.get("columns", [])}
+        new_columns = {col['name']: col for col in new_schema.get("columns", [])}
+
+        # --- Columns ---
+        # Drop columns
+        for col_name in set(old_columns) - set(new_columns):
+            self.sql_statements.append(f"ALTER TABLE `{table_name}` DROP COLUMN `{col_name}`;")
+
+        # Add columns
+        for col_name in set(new_columns) - set(old_columns):
+            col_def = self.get_column_definition(new_columns[col_name])
+            self.sql_statements.append(f"ALTER TABLE `{table_name}` ADD COLUMN {col_def};")
+
         # Modify existing columns
-        common_columns = set(old_columns.keys()) & set(new_columns.keys())
-        for column_name in sorted(common_columns):
-            old_col = old_columns[column_name]
-            new_col = new_columns[column_name]
-            
-            # Check if column definition has changed
-            if (old_col['type'] != new_col['type'] or 
-                old_col['nullable'] != new_col['nullable'] or
-                old_col['default'] != new_col['default']):
-                
+        for col_name in set(old_columns) & set(new_columns):
+            old_col = old_columns[col_name]
+            new_col = new_columns[col_name]
+            if old_col != new_col:
                 col_def = self.get_column_definition(new_col)
-                self.sql_statements.append(f"ALTER TABLE {table_name} MODIFY COLUMN {col_def};")
-        
-        # Modify UNIQUE constraints 🆕
-        old_uniques = {tuple(self.parse_constraint(c)['columns']) for c in old_schema.get("constraints", []) if "UniqueConstraint" in c}
-        new_uniques = {tuple(self.parse_constraint(c)['columns']) for c in new_schema.get("constraints", []) if "UniqueConstraint" in c}
+                self.sql_statements.append(f"ALTER TABLE `{table_name}` MODIFY COLUMN {col_def};")
 
-        uniques_to_drop = old_uniques - new_uniques
-        uniques_to_add = new_uniques - old_uniques
+        # --- Constraints ---
+        def _extract_constraint_key(c: Dict):
+            """
+            Returns a tuple that uniquely identifies a constraint for comparison purposes.
+            This is used to detect added, removed, or modified constraints.
+            """
+            ctype = c['type'].upper()
 
-        for cols in uniques_to_drop:
-            constraint_name = f"{table_name}_{'_'.join(cols)}_uniq"
-            self.sql_statements.append(f"ALTER TABLE {table_name} DROP INDEX {constraint_name};")
+            # PRIMARY KEY
+            if ctype == "PRIMARYKEY":
+                # PK is uniquely identified by its columns
+                return (ctype, tuple(c.get('columns', [])))
 
-        for cols in uniques_to_add:
-            constraint_name = f"{table_name}_{'_'.join(cols)}_uniq"
-            cols_str = ", ".join(cols)
-            self.sql_statements.append(f"ALTER TABLE {table_name} ADD CONSTRAINT {constraint_name} UNIQUE ({cols_str});")
-       
-        # Handle primary key changes
-        old_pk_cols = set()
-        new_pk_cols = set()
-        
-        for constraint in old_constraints:
-            if constraint['type'] == 'PRIMARY_KEY':
-                old_pk_cols.update(constraint['columns'])
-        
-        for constraint in new_constraints:
-            if constraint['type'] == 'PRIMARY_KEY':
-                new_pk_cols.update(constraint['columns'])
-        
-        # Handle CHECK constraints
-        old_checks = self._extract_check_constraints(old_schema.get("constraints", []))
-        new_checks = self._extract_check_constraints(new_schema.get("constraints", []))
-
-        added_checks = new_checks.keys() - old_checks.keys()
-        removed_checks = old_checks.keys() - new_checks.keys()
-
-        for name in added_checks:
-            condition = new_checks[name]
-            if condition and condition != "<UNKNOWN_CONDITION>":
-                self.sql_statements.append(
-                    f"ALTER TABLE `{table_name}` ADD CONSTRAINT `{name}` CHECK ({condition});"
-                )
-            else:
-                self.sql_statements.append(
-                    f"-- ⚠️ Skipped CHECK constraint `{name}` on `{table_name}`: unknown condition"
+            # UNIQUE
+            elif ctype == "UNIQUE":
+                return (
+                    ctype,
+                    tuple(c.get('columns', [])),   # columns are required
+                    c.get('name')                  # include name if exists
                 )
 
-        for name in removed_checks:
-            self.sql_statements.append(
-                f"ALTER TABLE `{table_name}` DROP CHECK `{name}`;"
-            )
+            # FOREIGN KEY
+            elif ctype == "FOREIGNKEY":
+                return (
+                    ctype,
+                    tuple(c.get('columns', [])),
+                    c.get('referenced_table'),
+                    tuple(c.get('referenced_columns', [])),
+                    c.get('name')
+                )
+
+            # CHECK
+            elif ctype == "CHECK":
+                return (
+                    ctype,
+                    c.get('condition'),  # CHECK is uniquely identified by its condition
+                    c.get('name')
+                )
+
+            # fallback: just use type and name
+            return (ctype, c.get('name'))
 
 
-        # --- NOT NULL CHANGES ---
-        old_not_nulls = self._extract_not_null_columns(old_schema.get("columns", []))
-        new_not_nulls = self._extract_not_null_columns(new_schema.get("columns", []))
+        old_constraints = [self.parse_constraint(c) for c in old_schema.get("constraints", [])]
+        new_constraints = [self.parse_constraint(c) for c in new_schema.get("constraints", [])]
+        print("Old constraints:", old_constraints)
+        print("New constraints:", new_constraints)
 
-        added_not_nulls = new_not_nulls - old_not_nulls
-        removed_not_nulls = old_not_nulls - new_not_nulls
+        old_cons_keys = {_extract_constraint_key(c): c for c in old_constraints}
+        new_cons_keys = {_extract_constraint_key(c): c for c in new_constraints}
 
-        for col in added_not_nulls:
-            self.sql_statements.append(
-                f"ALTER TABLE `{table_name}` MODIFY `{col}` SET NOT NULL;"
-            )
+        print("Old keys:", old_cons_keys.keys())
+        print("New keys:", new_cons_keys.keys())
+        # Drop removed constraints
+        for key, c in old_cons_keys.items():
+            if key not in new_cons_keys:
+                cname = f"`{c['name']}`" if c['name'] else "<UNNAMED>"
+                if c['type'] == "CHECK":
+                    self.sql_statements.append(f"ALTER TABLE {table_name} DROP CHECK {cname};")
+                elif c['type'] == "UNIQUE":
+                    self.sql_statements.append(f"ALTER TABLE {table_name} DROP CONSTRAINT {cname};")
+                elif c['type'] == "FOREIGNKEY":
+                    self.sql_statements.append(f"ALTER TABLE {table_name} DROP FOREIGN KEY {cname};")
 
-        for col in removed_not_nulls:
-            self.sql_statements.append(
-                f"ALTER TABLE `{table_name}` MODIFY `{col}` DROP NOT NULL;"
-            )
+        # Add new constraints
+        for key, c in new_cons_keys.items():
+            if key not in old_cons_keys:
+                cname = f"`{c['name']}`" if c['name'] else ""
+                if c['type'] == "CHECK":
+                    self.sql_statements.append(f"ALTER TABLE {table_name} ADD CONSTRAINT {cname} CHECK ({c['condition']});")
+                elif c['type'] == "UNIQUE":
+                    self.sql_statements.append(f"ALTER TABLE {table_name} ADD CONSTRAINT {cname} UNIQUE ({', '.join(c['columns'])});")
+                elif c['type'] == "FOREIGNKEY":
+                    self.sql_statements.append(
+                        f"ALTER TABLE {table_name} ADD CONSTRAINT {cname} FOREIGN KEY ({', '.join(c['columns'])}) REFERENCES {c['referenced_table']}({', '.join(c['referenced_columns'])});"
+                    )
+
+    def compare_schemas(self, old_schema: Dict, new_schema: Dict) -> List[str]:
+        """Generate SQL statements to transform old_schema -> new_schema"""
+        self.sql_statements = []
+
+        old_tables = set(old_schema.keys())
+        new_tables = set(new_schema.keys())
+
+        # Drop tables
+        for t in old_tables - new_tables:
+            self._drop_table(t)
+
+        # Create tables
+        for t in new_tables - old_tables:
+            self._create_table(t, new_schema[t])
+
+        # Modify tables
+        for t in old_tables & new_tables:
+            self._modify_table(t, old_schema[t], new_schema[t])
+
+        return self.sql_statements
+
 
 def main():
     if len(sys.argv) != 3:
         print("Usage: python schema_diff.py <old_schema.json> <new_schema.json>")
         sys.exit(1)
 
-    old_schema_path = sys.argv[1]
-    new_schema_path = sys.argv[2]
-
-    with open(old_schema_path, "r") as f:
+    with open(sys.argv[1], "r") as f:
         old_schema = json.load(f)
-
-    with open(new_schema_path, "r") as f:
+    with open(sys.argv[2], "r") as f:
         new_schema = json.load(f)
 
-    # Generate SQL statements
-    comparator = SchemaComparator()
+    comparator = SchemaComparator(dialect="mysql")
     sql_statements = comparator.compare_schemas(old_schema, new_schema)
 
-    output_file = "migrations/migration_output.sql"
-
+    output_file = "migration_output.sql"
+    output_dir = "migrations"
+    os.makedirs(output_dir, exist_ok=True)
+    output_file = os.path.join(output_dir, output_file)
     with open(output_file, "w") as f:
-        f.write("-- SQL statements to transform old_schema to new_schema\n")
-        f.write("-- ================================================\n\n")
-        
-        for i, statement in enumerate(sql_statements, 1):
-            f.write(f"-- Statement {i}\n")
-            f.write(statement + "\n\n")
-
-        f.write(f"-- Total statements: {len(sql_statements)}\n")
-
-    print(f"✅ SQL migration script written to: {output_file}")
+        f.write("-- SQL migration script\n\n")
+        for i, stmt in enumerate(sql_statements, 1):
+            f.write(f"-- Statement {i}\n{stmt}\n\n")
+    print(f"✅ Migration SQL written to {output_file}")
 
 
-        
 if __name__ == "__main__":
     main()

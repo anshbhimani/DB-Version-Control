@@ -1,0 +1,169 @@
+{
+"customers": {
+  "columns": [
+    {
+      "name": "id",
+      "type": "INTEGER",
+      "nullable": false,
+      "primary_key": true,
+      "default": "None"
+    },
+    {
+      "name": "age",
+      "type": "INTEGER",
+      "nullable": true,
+      "primary_key": false,
+      "default": "None"
+    },
+    {
+      "name": "category",
+      "type": "VARCHAR(20)",
+      "nullable": true,
+      "primary_key": false,
+      "default": "None"
+    }
+  ],
+  "indexes": []
+},
+"department": {
+  "columns": [
+    {
+      "name": "id",
+      "type": "INTEGER",
+      "nullable": false,
+      "primary_key": true,
+      "default": "None"
+    },
+    {
+      "name": "name",
+      "type": "VARCHAR(100)",
+      "nullable": true,
+      "primary_key": false,
+      "default": "None"
+    }
+  ],
+  "indexes": [],
+  "constraints": [
+    {
+      "name": null,
+      "type": "PrimaryKeyConstraint",
+      "columns": [
+        "id"
+      ]
+    }
+  ]
+},
+"projects": {
+  "columns": [
+    {
+      "name": "id",
+      "type": "INTEGER",
+      "nullable": false,
+      "primary_key": true,
+      "default": "None"
+    },
+    {
+      "name": "name",
+      "type": "VARCHAR(100)",
+      "nullable": false,
+      "primary_key": false,
+      "default": "None"
+    },
+    {
+      "name": "start_date",
+      "type": "DATE",
+      "nullable": false,
+      "primary_key": false,
+      "default": "None"
+    },
+    {
+      "name": "end_date",
+      "type": "DATE",
+      "nullable": false,
+      "primary_key": false,
+      "default": "None"
+    }
+  ],
+  "indexes": [],
+  "constraints": [
+    {
+      "name": null,
+      "type": "PrimaryKeyConstraint",
+      "columns": [
+        "id"
+      ]
+    }
+  ]
+},
+"student_department": {
+  "columns": [
+    {
+      "name": "student_id",
+      "type": "INTEGER",
+      "nullable": false,
+      "primary_key": true,
+      "default": "None"
+    },
+    {
+      "name": "department_id",
+      "type": "INTEGER",
+      "nullable": false,
+      "primary_key": true,
+      "default": "None"
+    },
+    {
+      "name": "assigned_on",
+      "type": "DATE",
+      "nullable": true,
+      "primary_key": false,
+      "default": "None"
+    }
+  ],
+  "indexes": [],
+  "constraints": [
+    {
+      "name": null,
+      "type": "PrimaryKeyConstraint",
+      "columns": [
+        "student_id",
+        "department_id"
+      ]
+    }
+  ]
+},
+"students": {
+  "columns": [
+    {
+      "name": "id",
+      "type": "INTEGER",
+      "nullable": false,
+      "primary_key": true,
+      "default": "None"
+    },
+    {
+      "name": "name",
+      "type": "VARCHAR(100)",
+      "nullable": false,
+      "primary_key": false,
+      "default": "None"
+    },
+    {
+      "name": "age",
+      "type": "INTEGER",
+      "nullable": false,
+      "primary_key": false,
+      "default": "None"
+    }
+  ],
+  "indexes": [],
+  "constraints": [
+    {
+      "name": null,
+      "type": "PrimaryKeyConstraint",
+      "columns": [
+        "id"
+      ]
+    }
+  ]
+}
+}

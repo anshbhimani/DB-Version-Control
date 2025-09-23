@@ -1,0 +1,231 @@
+{
+"customers": {
+  "columns": [
+    {
+      "name": "id",
+      "type": "INTEGER",
+      "nullable": false,
+      "primary_key": true,
+      "default": "None"
+    },
+    {
+      "name": "name",
+      "type": "VARCHAR(100)",
+      "nullable": true,
+      "primary_key": false,
+      "default": "None"
+    },
+    {
+      "name": "age",
+      "type": "INTEGER",
+      "nullable": true,
+      "primary_key": false,
+      "default": "None"
+    },
+    {
+      "name": "category",
+      "type": "VARCHAR(20)",
+      "nullable": true,
+      "primary_key": false,
+      "default": "None"
+    }
+  ],
+  "indexes": [],
+  "constraints": [
+    {
+      "name": null,
+      "type": "PrimaryKeyConstraint",
+      "columns": [
+        "id"
+      ]
+    },
+    {
+      "name": "ck_age_category",
+      "type": "CheckConstraint",
+      "columns": [],
+      "clause": "(((`age` < 13) and (`category` = _utf8mb4'child')) or ((`age` >= 13) and (`age` < 60) and (`category` = _utf8mb4'adult')) or ((`age` >= 60) and (`category` = _utf8mb4'senior')))"
+    }
+  ]
+},
+"department": {
+  "columns": [
+    {
+      "name": "id",
+      "type": "INTEGER",
+      "nullable": false,
+      "primary_key": true,
+      "default": "None"
+    },
+    {
+      "name": "name",
+      "type": "VARCHAR(100)",
+      "nullable": true,
+      "primary_key": false,
+      "default": "None"
+    }
+  ],
+  "indexes": [],
+  "constraints": [
+    {
+      "name": null,
+      "type": "PrimaryKeyConstraint",
+      "columns": [
+        "id"
+      ]
+    }
+  ]
+},
+"projects": {
+  "columns": [
+    {
+      "name": "id",
+      "type": "INTEGER",
+      "nullable": false,
+      "primary_key": true,
+      "default": "None"
+    },
+    {
+      "name": "name",
+      "type": "VARCHAR(100)",
+      "nullable": false,
+      "primary_key": false,
+      "default": "None"
+    },
+    {
+      "name": "start_date",
+      "type": "DATE",
+      "nullable": false,
+      "primary_key": false,
+      "default": "None"
+    },
+    {
+      "name": "end_date",
+      "type": "DATE",
+      "nullable": false,
+      "primary_key": false,
+      "default": "None"
+    }
+  ],
+  "indexes": [],
+  "constraints": [
+    {
+      "name": null,
+      "type": "PrimaryKeyConstraint",
+      "columns": [
+        "id"
+      ]
+    },
+    {
+      "name": "ck_date_order",
+      "type": "CheckConstraint",
+      "columns": [],
+      "clause": "(`start_date` <= `end_date`)"
+    }
+  ]
+},
+"student_department": {
+  "columns": [
+    {
+      "name": "student_id",
+      "type": "INTEGER",
+      "nullable": false,
+      "primary_key": true,
+      "default": "None"
+    },
+    {
+      "name": "department_id",
+      "type": "INTEGER",
+      "nullable": false,
+      "primary_key": true,
+      "default": "None"
+    },
+    {
+      "name": "assigned_on",
+      "type": "DATE",
+      "nullable": true,
+      "primary_key": false,
+      "default": "None"
+    }
+  ],
+  "indexes": [],
+  "constraints": [
+    {
+      "name": null,
+      "type": "PrimaryKeyConstraint",
+      "columns": [
+        "student_id",
+        "department_id"
+      ]
+    },
+    {
+      "name": "student_department_ibfk_1",
+      "type": "ForeignKeyConstraint",
+      "columns": [
+        "student_id"
+      ],
+      "referenced_table": "students",
+      "referenced_columns": [
+        "id"
+      ]
+    },
+    {
+      "name": "student_department_ibfk_2",
+      "type": "ForeignKeyConstraint",
+      "columns": [
+        "student_id"
+      ],
+      "referenced_table": "students",
+      "referenced_columns": [
+        "id"
+      ]
+    }
+  ]
+},
+"students": {
+  "columns": [
+    {
+      "name": "id",
+      "type": "INTEGER",
+      "nullable": false,
+      "primary_key": true,
+      "default": "None"
+    },
+    {
+      "name": "name",
+      "type": "VARCHAR(100)",
+      "nullable": false,
+      "primary_key": false,
+      "default": "None"
+    },
+    {
+      "name": "age",
+      "type": "INTEGER",
+      "nullable": false,
+      "primary_key": false,
+      "default": "None"
+    }
+  ],
+  "indexes": [],
+  "constraints": [
+    {
+      "name": null,
+      "type": "PrimaryKeyConstraint",
+      "columns": [
+        "id"
+      ]
+    },
+    {
+      "name": "students_chk_1",
+      "type": "CheckConstraint",
+      "columns": [],
+      "clause": "(`age` > 18)"
+    },
+    {
+      "name": "students_chk_2",
+      "type": "CheckConstraint",
+      "columns": [],
+      "clause": "(`age` > 18)"
+    }
+  ]
+}
+}
