@@ -10,7 +10,14 @@ import sqlalchemy
 from db import get_engine, reflect_schema
 from snapshot import build_schema_dict
 from schema_diff import SchemaComparator
-from changelog import insert_bulk_change_marker, poll_once as poll_changelog_once, get_tracked_tables, install_changelog
+from changelog import (
+    insert_bulk_change_marker,
+    poll_once as poll_changelog_once,
+    get_tracked_tables,
+    install_changelog,
+    CHANGELOG_FILE,
+    get_last_seen_id,
+)
 from manifest import record_checkpoint
 
 STATE_FILE = os.path.join("checkpoints", "watch_state.json")
@@ -71,6 +78,22 @@ def _git_commit(paths, message) -> str:
     subprocess.run(["git", "commit", "-m", message], check=False)
     result = subprocess.run(["git", "rev-parse", "HEAD"], check=False, capture_output=True, text=True)
     return result.stdout.strip() if result.returncode == 0 else None
+
+
+def poll_data_once():
+    """Flush the live changelog table to the git-tracked file, and -- unlike the
+    plain flush -- commit it when there's something new. DML capture itself is
+    already instant (trigger-fired); this is what turns that into an actual
+    checkpoint in history, the data-side equivalent of a schema-drift commit.
+    """
+    new_count = poll_changelog_once()
+    if not new_count:
+        return
+
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    commit_hash = _git_commit([CHANGELOG_FILE], f"Data checkpoint: {new_count} change(s) captured ({timestamp})")
+    record_checkpoint(timestamp=timestamp, changelog_last_id=get_last_seen_id(), git_commit=commit_hash)
+    print(f"Data checkpoint committed: {new_count} change(s)")
 
 
 def poll_schema_once():
@@ -145,12 +168,12 @@ def main():
     """
     once = "--once" in sys.argv
     positional = [a for a in sys.argv[1:] if a != "--once"]
-    changelog_interval = int(positional[0]) if len(positional) > 0 else 2
-    schema_every = int(positional[1]) if len(positional) > 1 else 15  # ~30s at default interval
+    changelog_interval = int(positional[0]) if len(positional) > 0 else 1
+    schema_every = int(positional[1]) if len(positional) > 1 else 1  # every tick at default interval
 
     tick = 0
     while True:
-        poll_changelog_once()
+        poll_data_once()
         if tick % schema_every == 0:
             poll_schema_once()
         tick += 1

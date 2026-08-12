@@ -1,6 +1,27 @@
 let checkpoints = [];
 let selectedTimestamp = null;
 let pendingForce = false;
+let activeRepo = null;
+let repos = [];
+
+// --- Element refs ---
+
+const onboardingScreenEl = document.getElementById('onboardingScreen');
+const mainScreenEl = document.getElementById('mainScreen');
+const onboardingFormEl = document.getElementById('onboardingForm');
+const onboardingDbListEl = document.getElementById('onboardingDbList');
+const obHostEl = document.getElementById('obHost');
+const obPortEl = document.getElementById('obPort');
+const obUserEl = document.getElementById('obUser');
+const obPasswordEl = document.getElementById('obPassword');
+const obConnectBtnEl = document.getElementById('obConnectBtn');
+const obErrorEl = document.getElementById('obError');
+const obDbCheckboxesEl = document.getElementById('obDbCheckboxes');
+const obAddBtnEl = document.getElementById('obAddBtn');
+const obBackBtnEl = document.getElementById('obBackBtn');
+const addRepoBtnEl = document.getElementById('addRepoBtn');
+const repoSelectEl = document.getElementById('repoSelect');
+const appTitleEl = document.getElementById('appTitle');
 
 const checkpointListEl = document.getElementById('checkpointList');
 const detailPanelEl = document.getElementById('detailPanel');
@@ -14,6 +35,129 @@ const confirmWarningTextEl = document.getElementById('confirmWarningText');
 const ackCheckboxEl = document.getElementById('ackCheckbox');
 const confirmProceedEl = document.getElementById('confirmProceed');
 const confirmCancelEl = document.getElementById('confirmCancel');
+const confirmStep1El = document.getElementById('confirmStep1');
+const confirmStep2El = document.getElementById('confirmStep2');
+const dataLossListEl = document.getElementById('dataLossList');
+const confirmTypedTextEl = document.getElementById('confirmTypedText');
+const confirmFinalEl = document.getElementById('confirmFinal');
+const confirmCancel2El = document.getElementById('confirmCancel2');
+
+let pendingPlan = null;
+
+let lastConnInfo = null; // {host, port, user, password} -- reused between "list databases" and "create repos"
+
+// --- Onboarding ---
+
+function showOnboarding() {
+  onboardingScreenEl.classList.remove('hidden');
+  mainScreenEl.classList.add('hidden');
+  onboardingFormEl.classList.remove('hidden');
+  onboardingDbListEl.classList.add('hidden');
+  obErrorEl.classList.add('hidden');
+}
+
+function showMain() {
+  onboardingScreenEl.classList.add('hidden');
+  mainScreenEl.classList.remove('hidden');
+}
+
+obConnectBtnEl.addEventListener('click', async () => {
+  obErrorEl.classList.add('hidden');
+  obConnectBtnEl.disabled = true;
+  obConnectBtnEl.textContent = 'Connecting…';
+
+  const conn = {
+    host: obHostEl.value.trim(),
+    port: parseInt(obPortEl.value, 10) || 3306,
+    user: obUserEl.value.trim(),
+    password: obPasswordEl.value,
+  };
+
+  const result = await window.dvc.listDatabases(conn);
+  obConnectBtnEl.disabled = false;
+  obConnectBtnEl.textContent = 'Connect & list databases';
+
+  if (result.error) {
+    obErrorEl.textContent = result.error;
+    obErrorEl.classList.remove('hidden');
+    return;
+  }
+
+  lastConnInfo = conn;
+  renderDbCheckboxes(result.databases);
+  onboardingFormEl.classList.add('hidden');
+  onboardingDbListEl.classList.remove('hidden');
+});
+
+function renderDbCheckboxes(databases) {
+  if (!databases.length) {
+    obDbCheckboxesEl.innerHTML = '<p class="muted">No databases found on this server.</p>';
+    return;
+  }
+  obDbCheckboxesEl.innerHTML = databases.map((name, i) => `
+    <div class="db-checkbox-row">
+      <input type="checkbox" id="obDb${i}" value="${name}">
+      <label for="obDb${i}" style="margin:0;color:#e6e6e6;">${name}</label>
+    </div>
+  `).join('');
+}
+
+obBackBtnEl.addEventListener('click', () => {
+  onboardingDbListEl.classList.add('hidden');
+  onboardingFormEl.classList.remove('hidden');
+});
+
+obAddBtnEl.addEventListener('click', async () => {
+  const selected = Array.from(obDbCheckboxesEl.querySelectorAll('input[type=checkbox]:checked')).map((cb) => cb.value);
+  if (!selected.length) return;
+
+  obAddBtnEl.disabled = true;
+  obAddBtnEl.textContent = 'Adding…';
+  const result = await window.dvc.createRepos({ ...lastConnInfo, databases: selected });
+  obAddBtnEl.disabled = false;
+  obAddBtnEl.textContent = 'Add selected';
+
+  if (result.errors && result.errors.length) {
+    obErrorEl.textContent = result.errors.join('; ');
+    obErrorEl.classList.remove('hidden');
+  }
+
+  if (result.created && result.created.length) {
+    await window.dvc.setActiveRepo(result.created[0].id);
+    await bootMain();
+  }
+});
+
+addRepoBtnEl.addEventListener('click', () => {
+  showOnboarding();
+});
+
+// --- Repo switcher ---
+
+async function loadRepos() {
+  repos = await window.dvc.listRepos();
+  activeRepo = await window.dvc.getActiveRepo();
+  renderRepoSelect();
+}
+
+function renderRepoSelect() {
+  repoSelectEl.innerHTML = repos.map((r) =>
+    `<option value="${r.id}" ${activeRepo && r.id === activeRepo.id ? 'selected' : ''}>${r.name}</option>`
+  ).join('');
+  appTitleEl.textContent = activeRepo ? `DB Version Control — ${activeRepo.name}` : 'DB Version Control';
+}
+
+repoSelectEl.addEventListener('change', async () => {
+  activeRepo = await window.dvc.setActiveRepo(repoSelectEl.value);
+  renderRepoSelect();
+  selectedTimestamp = null;
+  detailPanelEl.innerHTML = '<p class="empty-state">Select a checkpoint to see its revert plan.</p>';
+  const status = await window.dvc.watchStatus();
+  setCaptureUI(status.running);
+  await loadCheckpoints();
+});
+
+// --- Checkpoints ---
 
 function fmtDate(iso) {
   if (!iso) return 'unknown time';
@@ -135,15 +279,28 @@ function renderPlan(timestamp, plan, migrationSql) {
   detailPanelEl.innerHTML = html;
 
   const revertBtn = document.getElementById('revertBtn');
-  if (revertBtn) revertBtn.addEventListener('click', () => openConfirm(false));
+  if (revertBtn) revertBtn.addEventListener('click', () => openConfirm(false, plan));
   const forceBtn = document.getElementById('forceRevertBtn');
-  if (forceBtn) forceBtn.addEventListener('click', () => openConfirm(true));
+  if (forceBtn) forceBtn.addEventListener('click', () => openConfirm(true, plan));
 }
 
-function openConfirm(force) {
+function _isDestructive(plan) {
+  // A table that currently exists getting dropped is the only case where
+  // existing data is actually destroyed by the revert itself (vs. restored
+  // from backup, or a pure in-place alter that never touches data at all).
+  return plan.tables_dropped > 0 || plan.blocked;
+}
+
+function openConfirm(force, plan) {
   pendingForce = force;
+  pendingPlan = plan;
   ackCheckboxEl.checked = false;
   confirmProceedEl.disabled = true;
+  confirmTypedTextEl.value = '';
+  confirmFinalEl.disabled = true;
+  confirmStep1El.classList.remove('hidden');
+  confirmStep2El.classList.add('hidden');
+
   confirmWarningTextEl.textContent = force
     ? 'This revert has unresolved warnings and may apply an incomplete or incorrect migration. This is also a hard reset: every checkpoint after this point disappears from the list and git history moves back to here (a safety tag is kept, but this is not shown in the normal log).'
     : 'This is a hard reset, like git reset --hard: every checkpoint made after this point will be removed from the list, and git history moves back to here. A safety tag is created first so nothing is permanently lost, but this action should be treated as irreversible in normal use.';
@@ -157,8 +314,11 @@ ackCheckboxEl.addEventListener('change', () => {
 confirmCancelEl.addEventListener('click', () => {
   overlayEl.classList.add('hidden');
 });
+confirmCancel2El.addEventListener('click', () => {
+  overlayEl.classList.add('hidden');
+});
 
-confirmProceedEl.addEventListener('click', async () => {
+async function runApplyRevert() {
   overlayEl.classList.add('hidden');
   detailPanelEl.innerHTML = '<p class="empty-state">Applying revert…</p>';
   const result = await window.dvc.applyRevert(selectedTimestamp, pendingForce);
@@ -168,7 +328,27 @@ confirmProceedEl.addEventListener('click', async () => {
     detailPanelEl.innerHTML = `<p class="empty-state">❌ Revert failed.</p><pre>${result.stderr || result.stdout}</pre>`;
   }
   loadCheckpoints();
+}
+
+confirmProceedEl.addEventListener('click', () => {
+  if (!_isDestructive(pendingPlan)) {
+    runApplyRevert();
+    return;
+  }
+  // Destructive: don't apply yet -- second explicit confirmation naming
+  // exactly what gets dropped, so it's impossible to click through blind.
+  dataLossListEl.innerHTML = `This will DROP and lose current data in: <strong>${
+    pendingPlan.drop_tables.map((s) => s.match(/`([^`]+)`/)?.[1] || s).join(', ')
+  }</strong> (restored from the checkpoint's own baseline/changelog, not from what's live now).`;
+  confirmStep1El.classList.add('hidden');
+  confirmStep2El.classList.remove('hidden');
 });
+
+confirmTypedTextEl.addEventListener('input', () => {
+  confirmFinalEl.disabled = confirmTypedTextEl.value.trim() !== 'REVERT';
+});
+
+confirmFinalEl.addEventListener('click', runApplyRevert);
 
 // --- Capture controls ---
 
@@ -193,28 +373,42 @@ logToggleEl.addEventListener('click', () => {
   logPanelEl.classList.toggle('hidden');
 });
 
-window.dvc.onWatchLog((line) => {
+window.dvc.onWatchLog(({ repoId, line }) => {
+  if (!activeRepo || repoId !== activeRepo.id) return; // log panel only shows the active repo's capture
   logPanelEl.textContent += line;
   logPanelEl.scrollTop = logPanelEl.scrollHeight;
-  // A schema-change commit means new checkpoints exist -- refresh the list.
   if (line.includes('Schema change detected')) {
     loadCheckpoints();
   }
 });
 
-window.dvc.onWatchStopped(() => setCaptureUI(false));
-
-// --- Init ---
+window.dvc.onWatchStopped(({ repoId }) => {
+  if (activeRepo && repoId === activeRepo.id) setCaptureUI(false);
+});
 
 refreshBtnEl.addEventListener('click', loadCheckpoints);
 
 // Safety net: the checkpoint list only auto-refreshes when the UI's own
 // managed watch.py process logs a schema change. If capture is running
 // separately (a terminal, a cron job, another machine), this catches it too.
-setInterval(loadCheckpoints, 15000);
+setInterval(() => {
+  if (activeRepo) loadCheckpoints();
+}, 15000);
 
-(async function init() {
+// --- Boot ---
+
+async function bootMain() {
+  await loadRepos();
+  if (!activeRepo) {
+    showOnboarding();
+    return;
+  }
+  showMain();
   const status = await window.dvc.watchStatus();
   setCaptureUI(status.running);
   await loadCheckpoints();
+}
+
+(async function init() {
+  await bootMain();
 })();

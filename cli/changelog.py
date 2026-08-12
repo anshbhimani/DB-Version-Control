@@ -200,6 +200,13 @@ def insert_bulk_change_marker(engine, table_name: str, old_count: int, new_count
     print(f"BULK_CHANGE_DETECTED marker inserted for {table_name}: {old_count} -> {new_count}")
 
 
+def get_last_seen_id() -> int:
+    if not os.path.exists(STATE_FILE):
+        return 0
+    with open(STATE_FILE) as f:
+        return json.load(f).get("last_seen", 0)
+
+
 def poll_once(max_rows: int = 5000) -> int:
     """Read new changelog rows since last_seen, append to the git-tracked changelog file.
 

@@ -6,44 +6,84 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header>
-    <h1>DB Version Control</h1>
-    <div class="capture-controls">
-      <span id="captureStatus" class="status-pill status-stopped">Capture: Stopped</span>
-      <button id="captureToggle">Start Capture</button>
-      <button id="logToggle">Show Log</button>
+  <div id="onboardingScreen" class="onboarding hidden">
+    <div class="onboarding-box">
+      <h1>Connect a database</h1>
+      <p class="muted">Enter connection details for a MySQL server. You'll pick which databases to track next.</p>
+
+      <div id="onboardingForm">
+        <label>Host <input id="obHost" value="localhost"></label>
+        <label>Port <input id="obPort" value="3306"></label>
+        <label>User <input id="obUser" value="root"></label>
+        <label>Password <input id="obPassword" type="password"></label>
+        <button id="obConnectBtn">Connect &amp; list databases</button>
+        <p id="obError" class="error hidden"></p>
+      </div>
+
+      <div id="onboardingDbList" class="hidden">
+        <p class="muted">Select databases to track (each becomes its own independent checkpoint history):</p>
+        <div id="obDbCheckboxes"></div>
+        <button id="obAddBtn">Add selected</button>
+        <button id="obBackBtn">Back</button>
+      </div>
     </div>
-  </header>
+  </div>
 
-  <div id="logPanel" class="log-panel hidden"></div>
-
-  <main>
-    <section class="checkpoint-list-wrapper">
-      <div class="checkpoint-list-header">
-        <span>Checkpoints</span>
-        <button id="refreshBtn">Refresh</button>
+  <div id="mainScreen" class="hidden main-screen">
+    <header>
+      <div class="repo-switcher">
+        <select id="repoSelect"></select>
+        <button id="addRepoBtn">+ Add Database</button>
       </div>
-      <div id="checkpointList" class="checkpoint-list">
-        <p class="empty-state">Loading checkpoints…</p>
+      <h1 id="appTitle">DB Version Control</h1>
+      <div class="capture-controls">
+        <span id="captureStatus" class="status-pill status-stopped">Capture: Stopped</span>
+        <button id="captureToggle">Start Capture</button>
+        <button id="logToggle">Show Log</button>
       </div>
-    </section>
+    </header>
 
-    <section id="detailPanel" class="detail-panel">
-      <p class="empty-state">Select a checkpoint to see its revert plan.</p>
-    </section>
-  </main>
+    <div id="logPanel" class="log-panel hidden"></div>
+
+    <main>
+      <section class="checkpoint-list-wrapper">
+        <div class="checkpoint-list-header">
+          <span>Checkpoints</span>
+          <button id="refreshBtn">Refresh</button>
+        </div>
+        <div id="checkpointList" class="checkpoint-list">
+          <p class="empty-state">Loading checkpoints…</p>
+        </div>
+      </section>
+
+      <section id="detailPanel" class="detail-panel">
+        <p class="empty-state">Select a checkpoint to see its revert plan.</p>
+      </section>
+    </main>
+  </div>
 
   <div id="confirmOverlay" class="overlay hidden">
     <div class="confirm-box">
-      <h2>Confirm revert</h2>
+      <h2 id="confirmTitle">Confirm revert</h2>
       <p id="confirmWarningText"></p>
-      <label class="ack-label">
-        <input type="checkbox" id="ackCheckbox">
-        I understand this cannot be undone and want to proceed.
-      </label>
-      <div class="confirm-actions">
-        <button id="confirmCancel">Cancel</button>
-        <button id="confirmProceed" class="danger" disabled>Revert now</button>
+      <div id="confirmStep1">
+        <label class="ack-label">
+          <input type="checkbox" id="ackCheckbox">
+          I understand this cannot be undone and want to proceed.
+        </label>
+        <div class="confirm-actions">
+          <button id="confirmCancel">Cancel</button>
+          <button id="confirmProceed" class="danger" disabled>Revert now</button>
+        </div>
+      </div>
+      <div id="confirmStep2" class="hidden">
+        <p class="muted" id="dataLossList"></p>
+        <p class="muted">Type <strong>REVERT</strong> to confirm:</p>
+        <input id="confirmTypedText" placeholder="Type REVERT">
+        <div class="confirm-actions">
+          <button id="confirmCancel2">Cancel</button>
+          <button id="confirmFinal" class="danger" disabled>Yes, revert and lose that data</button>
+        </div>
       </div>
     </div>
   </div>

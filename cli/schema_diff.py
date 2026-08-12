@@ -261,24 +261,55 @@ class SchemaComparator:
                     )
 
         # --- Indexes (non-unique + unique, separate from UNIQUE constraints above) ---
-        old_indexes = {idx['name']: idx for idx in old_schema.get("indexes", []) if isinstance(idx, dict)}
-        new_indexes = {idx['name']: idx for idx in new_schema.get("indexes", []) if isinstance(idx, dict)}
+        old_indexes_raw = old_schema.get("indexes", [])
+        new_indexes_raw = new_schema.get("indexes", [])
 
-        for idx_name in set(old_indexes) - set(new_indexes):
+        # Old-format snapshots stored indexes as plain name strings (no columns/unique
+        # info) -- if EITHER side represents a given index name that way, there isn't
+        # enough information to diff it confidently, so skip it entirely rather than
+        # guessing add/remove. Without this, an old-format target makes every
+        # currently-existing index look "removed", which can try to drop one that's
+        # still backing an active FK (MySQL error 1553) or any other still-valid index.
+        ambiguous_names = {idx for idx in old_indexes_raw if isinstance(idx, str)} | \
+                          {idx for idx in new_indexes_raw if isinstance(idx, str)}
+
+        old_indexes = {idx['name']: idx for idx in old_indexes_raw if isinstance(idx, dict)}
+        new_indexes = {idx['name']: idx for idx in new_indexes_raw if isinstance(idx, dict)}
+        comparable_old = set(old_indexes) - ambiguous_names
+        comparable_new = set(new_indexes) - ambiguous_names
+
+        # An index backing a still-active FK can't be dropped on its own (MySQL error
+        # 1553) -- it has to go with its FK, so never emit a standalone DROP INDEX for
+        # one. Build the set of column-tuples currently backed by an FK that ISN'T also
+        # being dropped in this same diff (already staged into fk_drop_statements above).
+        fk_backed_column_sets = set()
+        for c in new_constraints:
+            if c['type'] == "FOREIGNKEY" and c.get('columns'):
+                key = (table_name, c.get('name'))
+                if key not in self._staged_fk_drops:
+                    fk_backed_column_sets.add(tuple(c['columns']))
+
+        def _is_fk_backed(idx: Dict) -> bool:
+            return tuple(idx.get('columns', [])) in fk_backed_column_sets
+
+        for idx_name in comparable_old - comparable_new:
+            if _is_fk_backed(old_indexes[idx_name]):
+                continue  # dropped implicitly when/if its FK is dropped; never standalone
             self.alter_statements.append(f"DROP INDEX `{idx_name}` ON `{table_name}`;")
 
-        for idx_name in set(new_indexes) - set(old_indexes):
+        for idx_name in comparable_new - comparable_old:
             idx = new_indexes[idx_name]
             unique_kw = "UNIQUE " if idx.get("unique") else ""
             self.alter_statements.append(
                 f"CREATE {unique_kw}INDEX `{idx_name}` ON `{table_name}` ({', '.join(idx['columns'])});"
             )
 
-        for idx_name in set(old_indexes) & set(new_indexes):
+        for idx_name in comparable_old & comparable_new:
             if old_indexes[idx_name] != new_indexes[idx_name]:
                 idx = new_indexes[idx_name]
                 unique_kw = "UNIQUE " if idx.get("unique") else ""
-                self.alter_statements.append(f"DROP INDEX `{idx_name}` ON `{table_name}`;")
+                if not _is_fk_backed(old_indexes[idx_name]):
+                    self.alter_statements.append(f"DROP INDEX `{idx_name}` ON `{table_name}`;")
                 self.alter_statements.append(
                     f"CREATE {unique_kw}INDEX `{idx_name}` ON `{table_name}` ({', '.join(idx['columns'])});"
                 )

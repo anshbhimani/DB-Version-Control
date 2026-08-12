@@ -7,6 +7,14 @@ from urllib.parse import urlparse
 import sqlalchemy as sa
 
 from db import get_engine
+from manifest import record_checkpoint
+
+
+def _git_commit(paths, message) -> str:
+    subprocess.run(["git", "add", *paths], check=False)
+    subprocess.run(["git", "commit", "-m", message], check=False)
+    result = subprocess.run(["git", "rev-parse", "HEAD"], check=False, capture_output=True, text=True)
+    return result.stdout.strip() if result.returncode == 0 else None
 
 
 def _current_changelog_id(engine) -> int:
@@ -89,6 +97,9 @@ def dump_baseline(timestamp: str = None, table: str = None, out_dir: str = "data
     marker_file = out_file + ".changelog_id"
     with open(marker_file, "w") as f:
         f.write(str(baseline_changelog_id))
+
+    commit_hash = _git_commit([out_file, marker_file], f"Data baseline captured ({timestamp})")
+    record_checkpoint(timestamp=timestamp, baseline_dump_path=out_file, git_commit=commit_hash)
 
     print(f"Baseline dump written to {out_file} (changelog cutoff id={baseline_changelog_id})")
     return out_file
