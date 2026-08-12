@@ -1,0 +1,99 @@
+{
+  "customers": {
+    "columns": [
+      {
+        "default": "None",
+        "name": "id",
+        "nullable": false,
+        "primary_key": true,
+        "type": "INTEGER"
+      },
+      {
+        "default": "None",
+        "name": "display_name",
+        "nullable": true,
+        "primary_key": false,
+        "type": "VARCHAR(50)"
+      },
+      {
+        "default": "None",
+        "name": "email",
+        "nullable": true,
+        "primary_key": false,
+        "type": "VARCHAR(100)"
+      }
+    ],
+    "constraints": [
+      {
+        "columns": [
+          "id"
+        ],
+        "name": null,
+        "type": "PrimaryKeyConstraint"
+      }
+    ],
+    "indexes": [
+      {
+        "columns": [
+          "display_name"
+        ],
+        "name": "idx_full_name",
+        "unique": false
+      }
+    ]
+  },
+  "orders": {
+    "columns": [
+      {
+        "default": "None",
+        "name": "id",
+        "nullable": false,
+        "primary_key": true,
+        "type": "INTEGER"
+      },
+      {
+        "default": "None",
+        "name": "customer_id",
+        "nullable": true,
+        "primary_key": false,
+        "type": "INTEGER"
+      },
+      {
+        "default": "None",
+        "name": "amount",
+        "nullable": true,
+        "primary_key": false,
+        "type": "DECIMAL(10, 2)"
+      }
+    ],
+    "constraints": [
+      {
+        "columns": [
+          "id"
+        ],
+        "name": null,
+        "type": "PrimaryKeyConstraint"
+      },
+      {
+        "columns": [
+          "customer_id"
+        ],
+        "name": "orders_ibfk_1",
+        "referenced_columns": [
+          "id"
+        ],
+        "referenced_table": "customers",
+        "type": "ForeignKeyConstraint"
+      }
+    ],
+    "indexes": [
+      {
+        "columns": [
+          "customer_id"
+        ],
+        "name": "customer_id",
+        "unique": false
+      }
+    ]
+  }
+}
