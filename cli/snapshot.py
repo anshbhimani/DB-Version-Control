@@ -37,17 +37,43 @@ def extract_check_constraints(engine, database_name: str) -> dict:
     return check_map
 
 
-def serialize_column(col):
+def extract_auto_increment_columns(engine, database_name: str) -> dict:
+    """Which columns are declared AUTO_INCREMENT (MySQL only -- Postgres
+    IDENTITY/serial uses sequences, a different mechanism, not covered here).
+
+    This is a schema-level property (is the column auto-incrementing or not),
+    not the current counter value -- the value is data-plane and already
+    covered by baseline dump/replay, so it's deliberately not tracked here.
+    Returns {table_name: {column_name, ...}}.
+    """
+    if engine.url.get_backend_name() != "mysql":
+        return {}
+
+    query = """
+    SELECT TABLE_NAME, COLUMN_NAME
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = :db AND EXTRA LIKE '%auto_increment%'
+    """
+    with engine.connect() as conn:
+        result = conn.execute(sqlalchemy.text(query), {"db": database_name})
+        auto_increment_cols = {}
+        for table_name, column_name in result:
+            auto_increment_cols.setdefault(table_name, set()).add(column_name)
+        return auto_increment_cols
+
+
+def serialize_column(col, auto_increment=False):
     return {
         "name": col.name,
         "type": str(col.type),
         "nullable": col.nullable,
         "primary_key": col.primary_key,
-        "default": str(col.default)
+        "default": str(col.default),
+        "auto_increment": auto_increment,
     }
 
 
-def serialize_table(table, external_checks=None):
+def serialize_table(table, external_checks=None, auto_increment_columns=None):
     """
     Serialize table including SQLAlchemy constraints.
     Optionally merge external_checks (from INFORMATION_SCHEMA).
@@ -82,17 +108,47 @@ def serialize_table(table, external_checks=None):
     # Sort constraints by name then type
     constraints.sort(key=lambda x: (x['name'] or '', x['type']))
 
+    indexes = [
+        {
+            "name": idx.name,
+            "columns": [col.name for col in idx.columns],
+            "unique": bool(idx.unique),
+        }
+        for idx in table.indexes
+    ]
+    indexes.sort(key=lambda x: x["name"] or "")
+
+    auto_increment_columns = auto_increment_columns or set()
     return {
-        "columns": [serialize_column(col) for col in table.columns],
-        "indexes": sorted([i.name for i in table.indexes]),
-        "constraints": constraints
+        "columns": [
+            serialize_column(col, auto_increment=col.name in auto_increment_columns)
+            for col in table.columns
+        ],
+        "indexes": indexes,
+        "constraints": constraints,
     }
+
+
+def build_schema_dict(metadata, engine):
+    """Build the {table_name: serialized_table} dict for the live DB, in-memory (no file write)."""
+    database_name = engine.url.database
+    check_constraints = extract_check_constraints(engine, database_name)
+    auto_increment_cols = extract_auto_increment_columns(engine, database_name)
+    schema_dict = {}
+    for table_name, table in metadata.tables.items():
+        schema_dict[table_name] = serialize_table(
+            table,
+            external_checks=check_constraints.get(table_name),
+            auto_increment_columns=auto_increment_cols.get(table_name),
+        )
+    return schema_dict
 
 
 def snapshot_schema(stream_file=True):
     metadata, engine = reflect_schema()
     database_name = engine.url.database
     check_constraints = extract_check_constraints(engine, database_name)
+    auto_increment_cols = extract_auto_increment_columns(engine, database_name)
 
     os.makedirs("snapshots", exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -105,7 +161,11 @@ def snapshot_schema(stream_file=True):
             tables = sorted(metadata.tables.keys())
             for i, table_name in enumerate(tables):
                 table = metadata.tables[table_name]
-                serialized = serialize_table(table, external_checks=check_constraints.get(table_name))
+                serialized = serialize_table(
+                    table,
+                    external_checks=check_constraints.get(table_name),
+                    auto_increment_columns=auto_increment_cols.get(table_name),
+                )
                 json.dump(table_name, f)
                 f.write(": ")
                 json.dump(serialized, f, indent=2)
@@ -116,7 +176,11 @@ def snapshot_schema(stream_file=True):
         # Regular full JSON dump
         schema_dict = {}
         for table_name, table in metadata.tables.items():
-            schema_dict[table_name] = serialize_table(table, external_checks=check_constraints.get(table_name))
+            schema_dict[table_name] = serialize_table(
+                table,
+                external_checks=check_constraints.get(table_name),
+                auto_increment_columns=auto_increment_cols.get(table_name),
+            )
         with open(filename, "w") as f:
             json.dump(schema_dict, f, indent=2, sort_keys=True)
 

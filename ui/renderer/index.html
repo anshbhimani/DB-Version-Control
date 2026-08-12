@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>DB Version Control</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>DB Version Control</h1>
+    <div class="capture-controls">
+      <span id="captureStatus" class="status-pill status-stopped">Capture: Stopped</span>
+      <button id="captureToggle">Start Capture</button>
+      <button id="logToggle">Show Log</button>
+    </div>
+  </header>
+
+  <div id="logPanel" class="log-panel hidden"></div>
+
+  <main>
+    <section class="checkpoint-list-wrapper">
+      <div class="checkpoint-list-header">
+        <span>Checkpoints</span>
+        <button id="refreshBtn">Refresh</button>
+      </div>
+      <div id="checkpointList" class="checkpoint-list">
+        <p class="empty-state">Loading checkpoints…</p>
+      </div>
+    </section>
+
+    <section id="detailPanel" class="detail-panel">
+      <p class="empty-state">Select a checkpoint to see its revert plan.</p>
+    </section>
+  </main>
+
+  <div id="confirmOverlay" class="overlay hidden">
+    <div class="confirm-box">
+      <h2>Confirm revert</h2>
+      <p id="confirmWarningText"></p>
+      <label class="ack-label">
+        <input type="checkbox" id="ackCheckbox">
+        I understand this cannot be undone and want to proceed.
+      </label>
+      <div class="confirm-actions">
+        <button id="confirmCancel">Cancel</button>
+        <button id="confirmProceed" class="danger" disabled>Revert now</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
